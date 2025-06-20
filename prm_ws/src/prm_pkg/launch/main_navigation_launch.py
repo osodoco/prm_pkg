@@ -1,56 +1,122 @@
 import os
+
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import (DeclareLaunchArgument, GroupAction,
+                            IncludeLaunchDescription, ExecuteProcess,
+                            RegisterEventHandler, LogInfo, OpaqueFunction)
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch.event_handlers import OnProcessStart
 from launch_ros.actions import Node
 
-def generate_launch_description():
-    package_share_dir = get_package_share_directory('prm_navigation')
+# --- OpaqueFunction for PRM nodes sequential launch ---
+def launch_prm_nodes_sequentially(context, *args, **kwargs):
+    prm_pkg_share_dir = get_package_share_directory('prm_pkg')
 
-    # --- Rutas ---
-    coppelia_exec = '/home/osdoco/ROM/CoppeliaSim_Edu_V4_9_0_rev6_Ubuntu22_04/coppeliaSim.sh'
-    scene_file = os.path.join(package_share_dir, 'coppelia_scenes', 'turtlebot3_burger_ROS2.ttt')
-    map_file_path = os.path.join(package_share_dir, 'maps', 'coppeliasim_map.yaml')
-
-    # --- Coppelia ---
-    coppelia_cmd = ExecuteProcess(
-        cmd=[coppelia_exec, scene_file],
-        output='screen',
-        name='coppeliasim_launcher',
-        emulate_tty=True
-    )
-
-    # --- PRM Nodes ---
-    prm_generator_node = Node(
-        package='prm_navigation',
-        executable='generate_prm',
-        name='generate_prm',
-        output='screen',
-    )
-
+    # 1. Launch PRM Navigator node first
     prm_navigator_node = Node(
-        package='prm_navigation',
+        package='prm_pkg',
         executable='prm_navigation',
-        name='prm_navigation',
+        name='prm_navigation_node',
         output='screen',
+        parameters=[{'use_sim_time': True}],
+        
     )
 
-    # --- Nav2 Bringup con tu mapa ---
-    nav2_bringup_cmd = ExecuteProcess(
-        cmd=[
-            'ros2', 'launch', 'nav2_bringup', 'bringup_launch.py',
-            f'map:={map_file_path}'
-        ],
+    # 2. Launch PRM Generator node after Navigator starts
+    prm_generator_node = Node(
+        package='prm_pkg',
+        executable='generate_prm',
+        name='generate_prm_node',
         output='screen',
-        name='nav2_bringup_launcher',
-        emulate_tty=True
+        parameters=[{'use_sim_time': True}],
     )
 
-    return LaunchDescription([
-        coppelia_cmd,
-        nav2_bringup_cmd,
-        prm_generator_node,
+    return [
         prm_navigator_node,
+        RegisterEventHandler(
+            OnProcessStart(
+                target_action=prm_navigator_node,
+                on_start=[
+                    LogInfo(msg='PRM Navigator ready, launching PRM Generator.'),
+                    prm_generator_node
+                ]
+            )
+        )
+    ]
+
+# --- Main generate_launch_description function ---
+def generate_launch_description():
+    # Get share directories for required packages
+    nav2_bringup_pkg = get_package_share_directory('nav2_bringup')
+    nav2_bringup_launch_dir = os.path.join(nav2_bringup_pkg, 'launch')
+
+    turtlebot3_coppeliasim_pkg = get_package_share_directory('turtlebot3_coppeliasim')
+    turtlebot3_coppeliasim_launch_dir = os.path.join(turtlebot3_coppeliasim_pkg, 'launch')
+    
+    prm_pkg_share_dir = get_package_share_directory('prm_pkg')
+
+
+    # --- Define Launch Arguments ---
+    declare_nav2_params_file_cmd = DeclareLaunchArgument(
+        'params_file',
+        default_value=os.path.join(nav2_bringup_pkg, 'params', 'nav2_params.yaml'),
+        description='Full path to the Nav2 parameters file'
+    )
+    nav2_params_file = LaunchConfiguration('params_file')
+    
+    map_file_path = os.path.join(prm_pkg_share_dir, 'maps', 'coppeliasim_map.yaml')
+
+    rviz_config_file = os.path.join(prm_pkg_share_dir, 'rviz', 'final_config.rviz')
+
+
+    # --- Actions ---
+
+    # 1. Launch CoppeliaSim with TurtleBot3 model 
+    coppeliasim_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(turtlebot3_coppeliasim_launch_dir, 'turtlebot3_coppeliasim_no_rviz2.launch.py')
+        ),
+
+        launch_arguments={'use_sim_time': 'true'}.items()
+    )
+
+    # 2. Launch Nav2 Bringup with your custom map
+    nav2_bringup_cmd = GroupAction([
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(nav2_bringup_launch_dir, 'bringup_launch.py')),
+            launch_arguments={
+                'map': map_file_path,
+                'params_file': nav2_params_file,
+                'use_sim_time': 'true'
+            }.items()
+        ),
     ])
 
+    # 3. Launch your custom RViz instance
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config_file], 
+        output='screen',
+        parameters=[{'use_sim_time': True}] 
+    )
+
+    # 4. Launch PRM Generator and Navigator nodes sequentially
+    prm_nodes_sequential_launch = OpaqueFunction(function=launch_prm_nodes_sequentially)
+
+    # Create the launch description and populate
+    ld = LaunchDescription()
+
+    # Add the actions in desired order
+    ld.add_action(declare_nav2_params_file_cmd)
+    ld.add_action(coppeliasim_launch)
+    ld.add_action(nav2_bringup_cmd)
+    ld.add_action(rviz_node) 
+    ld.add_action(prm_nodes_sequential_launch)
+
+    return ld

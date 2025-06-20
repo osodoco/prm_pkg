@@ -87,13 +87,11 @@ class PRMNavigator(Node):
         return max(components, key=len)
 
     def _closest_node_idx_all(self, pos):
-        """Encuentra el nodo más cercano en todos los nodos (sin filtro)"""
         nodes = np.array(self.nodes)
         dists = np.linalg.norm(nodes - np.array(pos), axis=1)
         return np.argmin(dists)
 
     def closest_node_idx(self, pos):
-        """Encuentra el nodo más cercano SOLO en el mayor componente conexo"""
         valid_nodes = list(self.get_largest_connected_component())
         if not valid_nodes:
             self.get_logger().error("No hay nodos conectados.")

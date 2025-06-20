@@ -31,7 +31,7 @@ class PRMGenerator(Node):
         self.map_origin = map_data['origin'][:2]
         map_image_path = os.path.join(os.path.dirname(map_yaml), map_data['image'])
 
-        # 🔑 Leer como grayscale + binarizar fuerte
+        #Leer como grayscale + binarizar fuerte
         raw_img = cv2.imread(map_image_path, cv2.IMREAD_GRAYSCALE)
         _, self.map_img = cv2.threshold(raw_img, 250, 255, cv2.THRESH_BINARY)
 
